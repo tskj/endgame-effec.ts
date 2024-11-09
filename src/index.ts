@@ -4,7 +4,7 @@ type Program<Input extends unknown[]> = {
   run: (...x: Input) => void;
 }
 
-type HandlerFunction = (...any: any[]) => (k: any, r: any) => void;
+type HandlerFunction = (...any: any[]) => (k: Program<[unknown]>, r: (x: any) => void) => void;
 
 type Handlers = {
   [key: symbol]: HandlerFunction,
@@ -96,15 +96,20 @@ const effect = () => {
   return f;
 }
 
+/*************** LIBRARY END *******************/
+/*************** LIBRARY END *******************/
+/*************** LIBRARY END *******************/
+/*************** LIBRARY END *******************/
+
 const call = effect();
 
-const y = program(function* (input: number) {
-  return input * 10;
+const y = program(function* (input: number, b: number) {
+  return input * 10 + b;
 });
 
 const x = program(function* () {
-  const test = yield call(y, 2);
-  const test2 = yield call(y, test);
+  const test = yield call(y, 2, 7);
+  const test2 = yield call(y, test, 3);
   return test2;
 })
 .with({
