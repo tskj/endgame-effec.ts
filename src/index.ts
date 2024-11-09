@@ -7,7 +7,7 @@ type Program<Input> = {
 type HandlerFunction = (...any: any[]) => (k: any, r: any) => void;
 
 type Handlers = {
-  [key: string]: HandlerFunction,
+  [key: symbol]: HandlerFunction,
 } & {
   return?: (v: unknown) => void,
 }
@@ -57,14 +57,14 @@ const program = <Input>(g: (x: Input) => Generator<Input>): Program<Input> => {
       const k = create_sub_program(handlers, history);
       const r = (returnValue: any) => {
         const returnHandler = handlers['return'];
-        if (returnHandler) returnHandler(returnValue)();
+        if (returnHandler) returnHandler(returnValue);
       }
 
       handler(...args)(k, r);
     } else {
       const returnValue = yielded.value;
       const returnHandler = handlers['return'];
-      if (returnHandler) returnHandler(returnValue)();
+      if (returnHandler) returnHandler(returnValue);
     }
   }
 
@@ -83,31 +83,37 @@ const program = <Input>(g: (x: Input) => Generator<Input>): Program<Input> => {
   return create_program({}, []);
 };
 
-const effect = (key: string) => {
-  return (...args: any[]) => {
+const effect = () => {
+  const key = Symbol();
+
+  const f = (...args: any[]) => {
     return [key, args];
   }
+
+  f.handler = key;
+
+  return f;
 }
 
-const call = effect('call');
+const call = effect();
 
 const y = program(function* (input: number) {
-  return input * 7;
+  return input * 10;
 });
 
 const x = program(function* () {
-  const test = yield call(y, 3);
+  const test = yield call(y, 2);
   return test;
 })
 .with({
-  call: (fn, ...args) => (k, r) => {
+  [call.handler]: (fn, ...args) => (k, r) => {
     fn.with({
-      return: (v: any) => () => {
+      return: (v: any) => {
          k.with({ return: r }).run(v);
       },
     }).run(...args);
   },
-  return: v => () => {
+  return: v => {
     console.log("here is return value of x:", v);
   },
 });
