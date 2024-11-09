@@ -1,9 +1,7 @@
-type Handler = <Input>(p: Program<Input>) => Program<Input>;
-
 type Program<Input> = {
   with: (h: Handlers) => Program<Input>;
   withOverride: (h: Handlers) => Program<Input>;
-  run: (x: Input, history?: any[]) => void;
+  run: (x: Input) => void;
 }
 
 type HandlerFunction = (...any: any[]) => (k: any, r: any) => void;
@@ -15,57 +13,91 @@ type Handlers = {
 }
 
 const program = <Input>(g: (x: Input) => Generator<Input>): Program<Input> => {
-  let handlers: any = {};
-
-  const run = (x: Input, history: any[] = []) => {
+  const create_runner = (handlers: any, history: any[]) => (x: Input) => {
     const it = g(x);
-    let state = it.next();
+    let yielded = it.next();
 
     history.forEach((x: any) => {
-      state = it.next(x);
+      yielded = it.next(x);
     });
 
-    if (!state.done) {
-      const value = state.value;
+    if (!yielded.done) {
+      const value = yielded.value;
       if (!Array.isArray(value)) throw "expected yielded value to be a tuple";
       if (value.length !== 2) throw "expected yielded value to be a 2-tuple";
 
       const [handlerKey, args] = value;
       const handler = handlers[handlerKey];
-      if (!handler) throw "expected to find handler"
+      if (!handler) throw "expected to find handler";
 
-      const k = program(function* () {
+      let is_first_run = true;
+      const create_sub_program = (handlers: any, history: any[]): Program<Input> => {
+        return {
+          with: (h: Handlers) => {
+            return create_sub_program({ ...h, ...handlers }, history);
+          },
+          withOverride: (h: Handlers) => {
+            return create_sub_program({ ...handlers, ...h }, history);
+          },
+          run: (provided: any) => {
+            const new_history = [...history, provided];
+            if (is_first_run && false) {
+              is_first_run = false;
+              const next_value = it.next(provided);
+              // we can activate this branch as an optimization for most cases that are single-shot
+              // but then we need to figure out how first
+              // ..
+            } else {
+              create_runner(handlers, new_history)(x);
+            }
+          },
+        };
+      };
 
-      }).with(handlers);
-      const r = ''
+      const k = create_sub_program(handlers, history);
+      const r = (returnValue: any) => {
+        const returnHandler = handlers['return'];
+        if (returnHandler) returnHandler(returnValue)();
+      }
 
       handler(...args)(k, r);
     } else {
-      const returnValue = state.value;
+      const returnValue = yielded.value;
       const returnHandler = handlers['return'];
-      if (returnHandler) returnHandler(returnValue);
+      if (returnHandler) returnHandler(returnValue)();
     }
   }
 
-  const p: Program<Input> = {
-    with: (h: Handlers) => {
-      handlers = { ...h, ...handlers };
-      // needs to be a new p really
-      return p;
-    },
-    withOverride: (h: Handlers) => {
-      handlers = { ...handlers, ...h };
-      // needs to be a new p really
-      return p;
-    },
-    run,
+  const create_program = (handlers: any, history: any[]): Program<Input> => {
+    return {
+      with: (h: Handlers) => {
+        return create_program({ ...h, ...handlers }, history);
+      },
+      withOverride: (h: Handlers) => {
+        return create_program({ ...handlers, ...h }, history);
+      },
+      run: create_runner(handlers, history),
+    };
   };
 
-  return p;
+  return create_program({}, []);
 };
 
+const effect = (key: string) => {
+  return (...args: any[]) => {
+    return [key, args];
+  }
+}
+
+const call = effect('call');
+
+const y = program(function* (input: number) {
+  return input * 7;
+});
+
 const x = program(function* () {
-  // testing!
+  const test = yield call(y, 3);
+  return test;
 })
 .with({
   call: (fn, ...args) => (k, r) => {
@@ -75,4 +107,9 @@ const x = program(function* () {
       },
     }).run(...args);
   },
+  return: v => () => {
+    console.log("here is return value of x:", v);
+  },
 });
+
+x.run([]);
