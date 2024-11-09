@@ -1,7 +1,7 @@
-type Program<Input> = {
+type Program<Input extends unknown[]> = {
   with: (h: Handlers) => Program<Input>;
   withOverride: (h: Handlers) => Program<Input>;
-  run: (x: Input) => void;
+  run: (...x: Input) => void;
 }
 
 type HandlerFunction = (...any: any[]) => (k: any, r: any) => void;
@@ -12,9 +12,9 @@ type Handlers = {
   return?: (v: unknown) => void,
 }
 
-const program = <Input>(g: (x: Input) => Generator<Input>): Program<Input> => {
-  const create_runner = (handlers: any, history: any[]) => (x: Input) => {
-    const it = g(x);
+const program = <Input extends unknown[]>(g: (...x: Input) => Generator<any>): Program<Input> => {
+  const create_runner = (handlers: any, history: any[]) => (...x: Input) => {
+    const it = g(...x);
     let yielded = it.next();
 
     history.forEach((x: any) => {
@@ -26,7 +26,7 @@ const program = <Input>(g: (x: Input) => Generator<Input>): Program<Input> => {
       if (!Array.isArray(value)) throw "expected yielded value to be a tuple";
       if (value.length !== 2) throw "expected yielded value to be a 2-tuple";
 
-      const [handlerKey, args] = value;
+      const [handlerKey, args] = value as any;
       const handler = handlers[handlerKey];
       if (!handler) throw "expected to find handler";
 
@@ -39,8 +39,9 @@ const program = <Input>(g: (x: Input) => Generator<Input>): Program<Input> => {
           withOverride: (h: Handlers) => {
             return create_sub_program({ ...handlers, ...h }, history);
           },
-          run: (provided: any) => {
-            const new_history = [...history, provided];
+          run: (...provided: any) => {
+            if (provided.length !== 1) throw "value passed by handler to continuation must be singular";
+            const new_history = [...history, provided[0]];
             if (is_first_run && false) {
               is_first_run = false;
               const next_value = it.next(provided);
@@ -48,7 +49,7 @@ const program = <Input>(g: (x: Input) => Generator<Input>): Program<Input> => {
               // but then we need to figure out how first
               // ..
             } else {
-              create_runner(handlers, new_history)(x);
+              create_runner(handlers, new_history)(...x);
             }
           },
         };
@@ -103,7 +104,8 @@ const y = program(function* (input: number) {
 
 const x = program(function* () {
   const test = yield call(y, 2);
-  return test;
+  const test2 = yield call(y, test);
+  return test2;
 })
 .with({
   [call.handler]: (fn, ...args) => (k, r) => {
@@ -118,4 +120,4 @@ const x = program(function* () {
   },
 });
 
-x.run([]);
+x.run();
