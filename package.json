@@ -1,11 +1,14 @@
 {
   "name": "endgame-effec.ts",
   "module": "src/index.ts",
-  "type": "module",
   "devDependencies": {
     "@types/bun": "latest"
   },
   "peerDependencies": {
     "typescript": "^5.0.0"
+  },
+  "type": "module",
+  "dependencies": {
+    "typescript-json-decoder": "^1.0.11"
   }
 }

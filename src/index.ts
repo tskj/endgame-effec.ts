@@ -1,10 +1,12 @@
+import { number, tuple } from "typescript-json-decoder";
+
 type Program<Input extends unknown[]> = {
   with: (h: Handlers) => Program<Input>;
   withOverride: (h: Handlers) => Program<Input>;
   run: (...x: Input) => void;
 }
 
-type HandlerFunction = (...any: any[]) => (k: Program<[unknown]>, r: (x: any) => void) => void;
+type HandlerFunction = (...any: any[]) => (k: Program<[unknown]>, r: (x: unknown) => void) => void;
 
 type Handlers = {
   [key: symbol]: HandlerFunction,
@@ -84,11 +86,23 @@ const program = <Input extends unknown[]>(g: (...x: Input) => Generator<any>): P
   return create_program({}, []);
 };
 
-const effect = () => {
+/**
+ * what I want is first argument to effect to be a zod validator that
+ * checks the inputs to the handler
+ * I want the second argument to be a zod validator that is used for the provided next value
+ * to the continuation
+ * and I want the third parameter to be a zod validator for the return value of the entire program
+ */
+const id = <T>(x: T): T => x;
+const effect = <Args extends any[], ContinuationInput, ContinuationReturn, FinalReturn>(
+  argsDecoder: (x: any) => Args = id,
+  continuationInputDecoder: (x: any) => ContinuationInput = id,
+  continuationReturnDecoder: (x: any) => ContinuationReturn = id,
+  finalReturnDecoder: (x: any) => FinalReturn = id) => {
   const key = Symbol();
 
   const f = (...args: any[]) => {
-    return [key, args];
+    return [key, argsDecoder(args)];
   }
 
   f.handler = key;
@@ -101,15 +115,22 @@ const effect = () => {
 /*************** LIBRARY END *******************/
 /*************** LIBRARY END *******************/
 
-const call = effect();
+/**
+ * so here I would call it with the three validators
+ * but notice that I want the input params of the function in the first
+ * validator to align with the second validator, and I want the return value of
+ * the function in the first validator to align with the third validator
+ */
+const decodeProgram: <T>(x: any) => {run: (y: T) => void} = id;
+const call = effect(tuple(decodeProgram, number));
 
-const y = program(function* (input: number, b: number) {
-  return input * 10 + b;
+const y = program(function* (input: number) {
+  return input * 10 + 8;
 });
 
 const x = program(function* () {
-  const test = yield call(y, 2, 7);
-  const test2 = yield call(y, test, 3);
+  const test = yield call(y, 2);
+  const test2 = yield call(y, test);
   return test2;
 })
 .with({
