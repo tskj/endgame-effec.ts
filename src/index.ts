@@ -1,6 +1,6 @@
 import { z, type ZodType } from "zod";
 
-type Program<Input extends unknown[]> = {
+export type Program<Input extends unknown[]> = {
   with: (...h: Handlers[]) => Program<Input>;
   withOverride: (...h: Handlers[]) => Program<Input>;
   registeredHandlers: Handlers;
@@ -25,7 +25,7 @@ const keep_symbolic_keys = (obj: any) => {
   return result;
 }
 
-const program = <Input extends unknown[]>(g: (...x: Input) => Generator<any>): Program<Input> => {
+export const program = <Input extends unknown[]>(g: (...x: Input) => Generator<any>): Program<Input> => {
   const create_runner = (handlers: any, history: any[]) => (...x: Input) => {
     const it = g(...x);
     let yielded = it.next();
@@ -106,7 +106,7 @@ type EffectReturnType<Args extends any[], ContinuationInput = unknown, FinalRetu
   handle: (h: (...args: Args) => (k: Program<[ContinuationInput]>, r: (x: FinalReturn) => void) => void) => Handlers;
 }
 */
-const effect = <Args extends any[], ContinuationInput = unknown, FinalReturn = unknown>(
+export const effect = <Args extends any[], ContinuationInput = unknown, FinalReturn = unknown>(
   argsDecoder?: ZodType<Args>,
   continuationInputDecoder?: ZodType<ContinuationInput>,
   finalReturnDecoder?: ZodType<FinalReturn>,
@@ -133,6 +133,8 @@ const effect = <Args extends any[], ContinuationInput = unknown, FinalReturn = u
     };
   };
 
+  f.standardHandler = {} as Handlers;
+
   return f;
 }
 
@@ -141,16 +143,30 @@ const effect = <Args extends any[], ContinuationInput = unknown, FinalReturn = u
 /*************** LIBRARY END *******************/
 /*************** LIBRARY END *******************/
 
-const call = (() => {
+export const call = (() => {
   const prepaid = effect();
   const f = <T extends unknown[]>(program: Program<T>, ...args: T) => prepaid(program, ...args);
   f.handler = prepaid.handler;
   f.handle = prepaid.handle;
+  f.standardHandler = prepaid.standardHandler;
   return f;
 })()
 
+call.standardHandler =
+  call.handle(
+    (fn, ...args) => (k, r) => {
+      fn
+        .with(k.registeredHandlers)
+        .with({
+          return: (v: any) => {
+            k.with({ return: r }).run(v);
+          },
+        }).run(...args);
+    }
+  );
+
 const w = program(function* (input: number) {
-  return input + 1;
+  return input + 2;
 });
 
 const y = program(function* (input: number) {
@@ -163,18 +179,7 @@ const x = program(function* () {
   const test2 = yield call(y, test);
   return test2;
 })
-.with(
-  call.handle(
-    (fn, ...args) => (k, r) => {
-      fn
-        .with(k.registeredHandlers)
-        .with({
-          return: (v: any) => {
-            k.with({ return: r }).run(v);
-          },
-        }).run(...args);
-    }
-  ))
+.with(call.standardHandler)
 .with({
   return: v => {
     console.log("here is return value of x:", v);
