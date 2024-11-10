@@ -1,9 +1,8 @@
-import { number, tuple } from "typescript-json-decoder";
+import { z, type ZodType } from "zod";
 
 type Program<Input extends unknown[]> = {
-  withHandlerPrograms: (...hs: any[]) => Program<Input>;
-  with: (h: Handlers) => Program<Input>;
-  withOverride: (h: Handlers) => Program<Input>;
+  with: (...h: Handlers[]) => Program<Input>;
+  withOverride: (...h: Handlers[]) => Program<Input>;
   run: (...x: Input) => void;
 }
 
@@ -36,14 +35,11 @@ const program = <Input extends unknown[]>(g: (...x: Input) => Generator<any>): P
       let is_first_run = true;
       const create_sub_program = (handlers: any, history: any[]): Program<Input> => {
         return {
-          withHandlerPrograms: (...hs: any[]) => {
-            return create_sub_program({ ...Object.assign({}, ...hs), ...handlers }, history);
+          with: (...h: Handlers[]) => {
+            return create_sub_program({ ...Object.assign({}, ...h), ...handlers }, history);
           },
-          with: (h: Handlers) => {
-            return create_sub_program({ ...h, ...handlers }, history);
-          },
-          withOverride: (h: Handlers) => {
-            return create_sub_program({ ...handlers, ...h }, history);
+          withOverride: (...h: Handlers[]) => {
+            return create_sub_program({ ...handlers, ...Object.assign({}, ...h) }, history);
           },
           run: (...provided: any) => {
             if (provided.length !== 1) throw "value passed by handler to continuation must be singular";
@@ -77,14 +73,11 @@ const program = <Input extends unknown[]>(g: (...x: Input) => Generator<any>): P
 
   const create_program = (handlers: any, history: any[]): Program<Input> => {
     return {
-      withHandlerPrograms: (...hs: any[]) => {
-        return create_program({ ...Object.assign({}, ...hs), ...handlers }, history);
+      with: (...h: Handlers[]) => {
+        return create_program({ ...Object.assign({}, ...h), ...handlers }, history);
       },
-      with: (h: Handlers) => {
-        return create_program({ ...h, ...handlers }, history);
-      },
-      withOverride: (h: Handlers) => {
-        return create_program({ ...handlers, ...h }, history);
+      withOverride: (...h: Handlers[]) => {
+        return create_program({ ...handlers, ...Object.assign({}, ...h) }, history);
       },
       run: create_runner(handlers, history),
     };
@@ -93,30 +86,36 @@ const program = <Input extends unknown[]>(g: (...x: Input) => Generator<any>): P
   return create_program({}, []);
 };
 
-/**
- * what I want is first argument to effect to be a zod validator that
- * checks the inputs to the handler
- * I want the second argument to be a zod validator that is used for the provided next value
- * to the continuation
- * and I want the third parameter to be a zod validator for the return value of the entire program
- */
-const id = <T>(x: T): T => x;
-const effect = <Args extends any[], ContinuationInput, ContinuationReturn, FinalReturn>(
-  argsDecoder: (x: any) => Args = id,
-  continuationInputDecoder: (x: any) => ContinuationInput = id,
-  continuationReturnDecoder: (x: any) => ContinuationReturn = id,
-  finalReturnDecoder: (x: any) => FinalReturn = id) => {
+/*
+type EffectReturnType<Args extends any[], ContinuationInput = unknown, FinalReturn = unknown> = {
+  (...args: Args): [symbol, Args];
+  readonly handler: unique symbol;
+  handle: (h: (...args: Args) => (k: Program<[ContinuationInput]>, r: (x: FinalReturn) => void) => void) => Handlers;
+}
+*/
+const effect = <Args extends any[], ContinuationInput = unknown, FinalReturn = unknown>(
+  argsDecoder?: ZodType<Args>,
+  continuationInputDecoder?: ZodType<ContinuationInput>,
+  finalReturnDecoder?: ZodType<FinalReturn>,
+) => {
   const key = Symbol();
 
-  const f = (...args: any[]) => {
-    return [key, argsDecoder(args)];
+  const f = (...args: Args) => {
+    return [key, argsDecoder ? argsDecoder.parse(args) : args] as const;
   }
 
   f.handler = key;
 
-  f.handle = (handler: (...args: Args) => (k: Program<[ContinuationInput]>, r: (x: FinalReturn) => void) => void) => {
+  f.handle = (h: (...args: Args) => (k: Program<[ContinuationInput]>, r: (x: FinalReturn) => void) => void) => {
     return {
-      [key]: handler,
+      [key]: (...args: any) => (k: any, r: any) => {
+        const program = (p: Program<any>): Program<any> => ({
+          with: (...whatever) => program(p.with(...whatever)),
+          withOverride: (...whatever) => program(p.withOverride(...whatever)),
+          run: v => p.run(continuationInputDecoder ? continuationInputDecoder.parse(v) : v),
+        });
+        h(...args)(program(k), v => r(finalReturnDecoder ? finalReturnDecoder.parse(v) : v));
+      },
     };
   };
 
@@ -128,33 +127,33 @@ const effect = <Args extends any[], ContinuationInput, ContinuationReturn, Final
 /*************** LIBRARY END *******************/
 /*************** LIBRARY END *******************/
 
-/**
- * so here I would call it with the three validators
- * but notice that I want the input params of the function in the first
- * validator to align with the second validator, and I want the return value of
- * the function in the first validator to align with the third validator
- */
-const decodeProgram: <T extends unknown[]>(x: any) => Program<T> = id;
-const call = effect(tuple(decodeProgram, number), number, number, number);
+const call = (() => {
+  const prepaid = effect(undefined, z.number());
+  const f = <T extends unknown[]>(program: Program<T>, ...args: T) => prepaid(program, ...args);
+  f.handler = prepaid.handler;
+  f.handle = prepaid.handle;
+  return f;
+})()
 
 const y = program(function* (input: number) {
   return input * 10 + 8;
 });
 
 const x = program(function* () {
-  const test = yield call(y, 2);
+  const test: number = yield call(y, 2);
   const test2 = yield call(y, test);
   return test2;
 })
-.withHandlerPrograms(
-  call.handle((fn, ...args) => (k, r) => {
-    fn.with({
-      return: v => {
-         k.with({ return: r }).run(v);
-      },
-    }).run(...args);
-  })
-)
+.with(
+  call.handle(
+    (fn, ...args) => (k, r) => {
+      fn.with({
+        return: (v: any) => {
+          k.with({ return: r }).run(v);
+        },
+      }).run(...args);
+    }
+  ))
 .with({
   // [call.handler]: (fn, ...args) => (k, r) => {
   //   fn.with({
