@@ -1,17 +1,18 @@
 import { number, tuple } from "typescript-json-decoder";
 
 type Program<Input extends unknown[]> = {
+  withHandlerPrograms: (...hs: any[]) => Program<Input>;
   with: (h: Handlers) => Program<Input>;
   withOverride: (h: Handlers) => Program<Input>;
   run: (...x: Input) => void;
 }
 
-type HandlerFunction = (...any: any[]) => (k: Program<[unknown]>, r: (x: unknown) => void) => void;
+type HandlerFunction = (...any: any[]) => (k: Program<[unknown]>, r: (x: any) => void) => void;
 
 type Handlers = {
   [key: symbol]: HandlerFunction,
 } & {
-  return?: (v: unknown) => void,
+  return?: (v: any) => void,
 }
 
 const program = <Input extends unknown[]>(g: (...x: Input) => Generator<any>): Program<Input> => {
@@ -35,6 +36,9 @@ const program = <Input extends unknown[]>(g: (...x: Input) => Generator<any>): P
       let is_first_run = true;
       const create_sub_program = (handlers: any, history: any[]): Program<Input> => {
         return {
+          withHandlerPrograms: (...hs: any[]) => {
+            return create_sub_program({ ...Object.assign({}, ...hs), ...handlers }, history);
+          },
           with: (h: Handlers) => {
             return create_sub_program({ ...h, ...handlers }, history);
           },
@@ -73,6 +77,9 @@ const program = <Input extends unknown[]>(g: (...x: Input) => Generator<any>): P
 
   const create_program = (handlers: any, history: any[]): Program<Input> => {
     return {
+      withHandlerPrograms: (...hs: any[]) => {
+        return create_program({ ...Object.assign({}, ...hs), ...handlers }, history);
+      },
       with: (h: Handlers) => {
         return create_program({ ...h, ...handlers }, history);
       },
@@ -107,6 +114,12 @@ const effect = <Args extends any[], ContinuationInput, ContinuationReturn, Final
 
   f.handler = key;
 
+  f.handle = (handler: (...args: Args) => (k: Program<[ContinuationInput]>, r: (x: FinalReturn) => void) => void) => {
+    return {
+      [key]: handler,
+    };
+  };
+
   return f;
 }
 
@@ -121,8 +134,8 @@ const effect = <Args extends any[], ContinuationInput, ContinuationReturn, Final
  * validator to align with the second validator, and I want the return value of
  * the function in the first validator to align with the third validator
  */
-const decodeProgram: <T>(x: any) => {run: (y: T) => void} = id;
-const call = effect(tuple(decodeProgram, number));
+const decodeProgram: <T extends unknown[]>(x: any) => Program<T> = id;
+const call = effect(tuple(decodeProgram, number), number, number, number);
 
 const y = program(function* (input: number) {
   return input * 10 + 8;
@@ -133,14 +146,23 @@ const x = program(function* () {
   const test2 = yield call(y, test);
   return test2;
 })
-.with({
-  [call.handler]: (fn, ...args) => (k, r) => {
+.withHandlerPrograms(
+  call.handle((fn, ...args) => (k, r) => {
     fn.with({
-      return: (v: any) => {
+      return: v => {
          k.with({ return: r }).run(v);
       },
     }).run(...args);
-  },
+  })
+)
+.with({
+  // [call.handler]: (fn, ...args) => (k, r) => {
+  //   fn.with({
+  //     return: (v: any) => {
+  //        k.with({ return: r }).run(v);
+  //     },
+  //   }).run(...args);
+  // },
   return: v => {
     console.log("here is return value of x:", v);
   },
