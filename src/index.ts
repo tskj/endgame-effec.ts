@@ -3,6 +3,7 @@ import { z, type ZodType } from "zod";
 type Program<Input extends unknown[]> = {
   with: (...h: Handlers[]) => Program<Input>;
   withOverride: (...h: Handlers[]) => Program<Input>;
+  registeredHandlers: Handlers;
   run: (...x: Input) => void;
 }
 
@@ -12,6 +13,16 @@ type Handlers = {
   [key: symbol]: HandlerFunction,
 } & {
   return?: (v: any) => void,
+}
+
+const keep_symbolic_keys = (obj: any) => {
+  const result: any = {};
+
+  for (const key of Object.getOwnPropertySymbols(obj)) {
+    result[key] = obj[key];
+  }
+
+  return result;
 }
 
 const program = <Input extends unknown[]>(g: (...x: Input) => Generator<any>): Program<Input> => {
@@ -41,6 +52,7 @@ const program = <Input extends unknown[]>(g: (...x: Input) => Generator<any>): P
           withOverride: (...h: Handlers[]) => {
             return create_sub_program({ ...handlers, ...Object.assign({}, ...h) }, history);
           },
+          registeredHandlers: keep_symbolic_keys(handlers),
           run: (...provided: any) => {
             if (provided.length !== 1) throw "value passed by handler to continuation must be singular";
             const new_history = [...history, provided[0]];
@@ -79,6 +91,7 @@ const program = <Input extends unknown[]>(g: (...x: Input) => Generator<any>): P
       withOverride: (...h: Handlers[]) => {
         return create_program({ ...handlers, ...Object.assign({}, ...h) }, history);
       },
+      registeredHandlers: keep_symbolic_keys(handlers),
       run: create_runner(handlers, history),
     };
   };
@@ -112,6 +125,7 @@ const effect = <Args extends any[], ContinuationInput = unknown, FinalReturn = u
         const program = (p: Program<any>): Program<any> => ({
           with: (...whatever) => program(p.with(...whatever)),
           withOverride: (...whatever) => program(p.withOverride(...whatever)),
+          registeredHandlers: keep_symbolic_keys(p.registeredHandlers),
           run: v => p.run(continuationInputDecoder ? continuationInputDecoder.parse(v) : v),
         });
         h(...args)(program(k), v => r(finalReturnDecoder ? finalReturnDecoder.parse(v) : v));
@@ -128,15 +142,20 @@ const effect = <Args extends any[], ContinuationInput = unknown, FinalReturn = u
 /*************** LIBRARY END *******************/
 
 const call = (() => {
-  const prepaid = effect(undefined, z.number());
+  const prepaid = effect();
   const f = <T extends unknown[]>(program: Program<T>, ...args: T) => prepaid(program, ...args);
   f.handler = prepaid.handler;
   f.handle = prepaid.handle;
   return f;
 })()
 
+const w = program(function* (input: number) {
+  return input + 1;
+});
+
 const y = program(function* (input: number) {
-  return input * 10 + 8;
+  const value = yield call(w, input);
+  return value * 10 + 8;
 });
 
 const x = program(function* () {
@@ -147,21 +166,16 @@ const x = program(function* () {
 .with(
   call.handle(
     (fn, ...args) => (k, r) => {
-      fn.with({
-        return: (v: any) => {
-          k.with({ return: r }).run(v);
-        },
-      }).run(...args);
+      fn
+        .with(k.registeredHandlers)
+        .with({
+          return: (v: any) => {
+            k.with({ return: r }).run(v);
+          },
+        }).run(...args);
     }
   ))
 .with({
-  // [call.handler]: (fn, ...args) => (k, r) => {
-  //   fn.with({
-  //     return: (v: any) => {
-  //        k.with({ return: r }).run(v);
-  //     },
-  //   }).run(...args);
-  // },
   return: v => {
     console.log("here is return value of x:", v);
   },
